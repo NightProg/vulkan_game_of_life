@@ -660,7 +660,6 @@ impl ApplicationHandler for GameOfLife {
             .as_mut()
             .unwrap()
             .add_grid(self.grid.clone());
-        self.render_ctx.as_mut().unwrap().update_vertex();
     }
 
     fn window_event(
@@ -671,12 +670,10 @@ impl ApplicationHandler for GameOfLife {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                println!("The close button was pressed; stopping");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
                 self.render_ctx.as_mut().unwrap().update_vertex();
-
                 self.render_ctx.as_mut().unwrap().draw();
                 self.render_ctx
                     .as_mut()
