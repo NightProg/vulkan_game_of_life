@@ -28,20 +28,20 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
-pub const WINDOW_WIDTH: u32 = 800;
-pub const WINDOW_HEIGHT: u32 = 800;
-pub const CELL_SIZE: f32 = 50.0;
+const WINDOW_WIDTH: u32 = 800;
+const WINDOW_HEIGHT: u32 = 800;
+const CELL_SIZE: f32 = 50.0;
 
-pub const GRID_COUNT: f32 = GRID_WIDTH * GRID_HEIGHT;
-pub const GRID_WIDTH: f32 = WINDOW_WIDTH as f32 / CELL_SIZE;
-pub const GRID_HEIGHT: f32 = WINDOW_HEIGHT as f32 / CELL_SIZE;
+const GRID_COUNT: f32 = GRID_WIDTH * GRID_HEIGHT;
+const GRID_WIDTH: f32 = WINDOW_WIDTH as f32 / CELL_SIZE;
+const GRID_HEIGHT: f32 = WINDOW_HEIGHT as f32 / CELL_SIZE;
 
-pub const GRID_LIVE_COLOR: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
-pub const GRID_DEAD_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const GRID_LIVE_COLOR: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+const GRID_DEAD_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 type Rect = [GAFVertex; 6];
 
-pub fn normalize_coord(coord: [f32; 2]) -> [f32; 2] {
+fn normalize_coord(coord: [f32; 2]) -> [f32; 2] {
     let x = (coord[0] / WINDOW_WIDTH as f32) * 2.0 - 1.0;
     let y = (coord[1] / WINDOW_HEIGHT as f32) * 2.0 - 1.0;
     [x, y]
@@ -111,7 +111,9 @@ mod fs {
 
 
 
-pub struct RenderCtx {
+
+
+struct RenderCtx {
     ctx: VkContext,
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
@@ -349,7 +351,7 @@ impl RenderCtx {
         }
     }
 
-    pub fn draw(&mut self) {
+    fn draw(&mut self) {
         let mut command_buffer = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
             self.ctx.graphic_queue.queue_family_index(),
@@ -421,7 +423,7 @@ impl RenderCtx {
 }
 
 #[derive(Clone)]
-pub struct VkContext {
+struct VkContext {
     instance: Arc<Instance>,
     physical_device: Arc<PhysicalDevice>,
     device: Arc<Device>,
@@ -449,7 +451,7 @@ impl VkContext {
         }
         None
     }
-    pub fn new(event_loop: &ActiveEventLoop) -> Self {
+    fn new(event_loop: &ActiveEventLoop) -> Self {
 
         let vulkan_library = VulkanLibrary::new().expect("Failed to load Vulkan library");
         let mut instance_flags = InstanceCreateFlags::empty();
@@ -506,18 +508,18 @@ impl VkContext {
 
 
 #[derive(Clone)]
-pub struct Grid {
+struct Grid {
     grid: Vec<Vec<bool>>,
 }
 
 impl Grid {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let grid = vec![vec![false; GRID_WIDTH as usize]; GRID_HEIGHT as usize];
         Grid { grid }
     }
 
 
-    pub fn randomize(&mut self) {
+    fn randomize(&mut self) {
         for i in 0..self.grid.len() {
             for j in 0..self.grid[i].len() {
                 self.grid[i][j] = rand::random();
@@ -525,15 +527,15 @@ impl Grid {
         }
     }
 
-    pub fn height(&self) -> usize {
+    fn height(&self) -> usize {
         self.grid.len()
     }
 
-    pub fn width(&self) -> usize {
+    fn width(&self) -> usize {
         self.grid[0].len()
     }
 
-    pub fn update(&mut self) {
+    fn update(&mut self) {
         let height = self.height();
         let width = self.width();
 
@@ -575,14 +577,14 @@ impl Grid {
 
 }
 
-pub struct GameOfLife {
+struct GameOfLife {
     context: Option<VkContext>,
     render_ctx: Option<RenderCtx>,
     grid: Grid,
 }
 
 impl GameOfLife {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let mut grid = Grid::new();
 
         grid.randomize();
