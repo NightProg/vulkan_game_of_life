@@ -54,8 +54,6 @@ type Rect = [GAFVertex; 6];
 type Coord = [f32; 2];
 type Color = [f32; 4];
 
-
-
 #[derive(BufferContents, Vertex, Copy, Clone)]
 #[repr(C)]
 struct GAFVertex {
@@ -102,7 +100,6 @@ mod fs {
     }
 }
 
-
 #[derive(Clone)]
 struct FrameResources {
     images: Vec<Arc<Image>>,
@@ -115,10 +112,7 @@ impl FrameResources {
         let image_views = images
             .iter()
             .map(|image| {
-                ImageView::new_default(
-                    image.clone(),
-                )
-                    .expect("Failed to create image view")
+                ImageView::new_default(image.clone()).expect("Failed to create image view")
             })
             .collect::<Vec<_>>();
 
@@ -133,10 +127,9 @@ impl FrameResources {
                         ..Default::default()
                     },
                 )
-                    .expect("Failed to create framebuffer")
+                .expect("Failed to create framebuffer")
             })
             .collect::<Vec<_>>();
-
 
         Self {
             framebuffer,
@@ -144,7 +137,6 @@ impl FrameResources {
             image_views,
         }
     }
-    
 }
 
 struct RenderCtx {
@@ -165,7 +157,6 @@ struct RenderCtx {
 }
 
 impl RenderCtx {
-
     fn new(context: VkContext, grid: Grid) -> Self {
         let image_format = context
             .physical_device
@@ -202,7 +193,7 @@ impl RenderCtx {
                     ..Default::default()
                 },
             )
-                .expect("Failed to create swapchain")
+            .expect("Failed to create swapchain")
         };
 
         let standard_memory_allocator =
@@ -273,10 +264,7 @@ impl RenderCtx {
             StandardCommandBufferAllocatorCreateInfo::default(),
         ));
 
-        let frame_resources = FrameResources::create(
-            images,
-            render_pass.clone(),
-        );
+        let frame_resources = FrameResources::create(images, render_pass.clone());
 
         let viewport = Viewport {
             offset: [0.0; 2],
@@ -336,12 +324,8 @@ impl RenderCtx {
                     GRID_DEAD_COLOR
                 };
 
-
                 let coord = [row as f32 * CELL_SIZE, col as f32 * CELL_SIZE];
-                let rect = self.rect(
-                    coord,
-                    color
-                );
+                let rect = self.rect(coord, color);
 
                 let rect_index = col * self.grid.width() + row;
 
@@ -350,7 +334,6 @@ impl RenderCtx {
                 }
             }
         }
-
     }
 
     fn grid_update(&mut self) {
@@ -394,28 +377,24 @@ impl RenderCtx {
         ]
     }
 
-
-
     fn resize(&mut self, physical_size: PhysicalSize<u32>) {
         self.window_width = physical_size.width;
         self.window_height = physical_size.height;
         self.viewport.extent = [self.window_width as f32, self.window_height as f32];
 
         self.grid.resize(physical_size);
-        
-        let (new_swapchain, new_images) = self.swapchain.recreate(
-            SwapchainCreateInfo {
+
+        let (new_swapchain, new_images) = self
+            .swapchain
+            .recreate(SwapchainCreateInfo {
                 image_extent: [physical_size.width, physical_size.height],
                 ..self.swapchain.create_info()
-            }
-        ).expect("Failed to recreate swapchain");
+            })
+            .expect("Failed to recreate swapchain");
         self.swapchain = new_swapchain;
-        self.frame_resources = FrameResources::create(
-            new_images,
-            self.render_pass.clone(),
-        );
+        self.frame_resources = FrameResources::create(new_images, self.render_pass.clone());
 
-        let grid_count = 
+        let grid_count =
             (physical_size.width as f32 / CELL_SIZE) * (physical_size.height as f32 / CELL_SIZE);
         for i in 0..2 {
             self.vertex_buffers[i] = Buffer::new_slice(
@@ -433,7 +412,6 @@ impl RenderCtx {
             )
             .expect("Failed to create vertex buffer");
         }
-
     }
 
     fn grid_len(&self) -> usize {
@@ -447,7 +425,6 @@ impl RenderCtx {
             CommandBufferUsage::OneTimeSubmit,
         )
         .expect("Failed to create command buffer builder");
-        
 
         let (image_index, suboptimal, aquirefutur) =
             acquire_next_image(self.swapchain.clone(), Some(Duration::from_secs(1)))
@@ -505,11 +482,7 @@ impl RenderCtx {
         self.previous_frame_end = Some(Box::new(future));
         self.frame_index = (self.frame_index + 1) % self.vertex_buffers.len();
 
-        self
-            .previous_frame_end
-            .as_mut()
-            .unwrap()
-            .cleanup_finished();
+        self.previous_frame_end.as_mut().unwrap().cleanup_finished();
     }
 }
 
@@ -684,7 +657,7 @@ impl Grid {
 
         self.grid = new_grid;
     }
-    
+
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
         let new_width = (new_size.width as f32 / CELL_SIZE) as usize;
         let new_height = (new_size.height as f32 / CELL_SIZE) as usize;
@@ -713,7 +686,6 @@ impl GameOfLife {
 }
 
 impl ApplicationHandler for GameOfLife {
-    
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let mut grid = Grid::new(WINDOW_WIDTH as usize, WINDOW_HEIGHT as usize);
         grid.randomize();
@@ -752,11 +724,10 @@ impl ApplicationHandler for GameOfLife {
                 } else if physical_key == PhysicalKey::Code(KeyCode::KeyN) {
                     self.render_ctx.as_mut().unwrap().grid.randomize();
                 }
-
-            },
+            }
             WindowEvent::Resized(physical_size) => {
                 self.render_ctx.as_mut().unwrap().resize(physical_size)
-            },
+            }
             _ => (),
         }
     }
