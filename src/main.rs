@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
@@ -32,70 +33,37 @@ use vulkano::swapchain::{
 use vulkano::sync::GpuFuture;
 use vulkano::{DeviceSize, Version, VulkanLibrary, sync};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 const WINDOW_WIDTH: u32 = 800;
 const WINDOW_HEIGHT: u32 = 800;
-const CELL_SIZE: f32 = 50.0;
+const CELL_SIZE: f32 = 10.0;
 
 const GRID_COUNT: f32 = GRID_WIDTH * GRID_HEIGHT;
 const GRID_WIDTH: f32 = WINDOW_WIDTH as f32 / CELL_SIZE;
 const GRID_HEIGHT: f32 = WINDOW_HEIGHT as f32 / CELL_SIZE;
 
-const GRID_LIVE_COLOR: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
-const GRID_DEAD_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const GRID_LIVE_COLOR: Color = [1.0, 0.0, 0.0, 1.0];
+const GRID_DEAD_COLOR: Color = [1.0, 1.0, 1.0, 1.0];
 
 type Rect = [GAFVertex; 6];
+type Coord = [f32; 2];
+type Color = [f32; 4];
 
-fn normalize_coord(coord: [f32; 2]) -> [f32; 2] {
-    let x = (coord[0] / WINDOW_WIDTH as f32) * 2.0 - 1.0;
-    let y = (coord[1] / WINDOW_HEIGHT as f32) * 2.0 - 1.0;
-    [x, y]
-}
 
-fn rect(coord: [f32; 2], color: [f32; 4]) -> Rect {
-    let [x, y] = normalize_coord(coord);
-    let [nx, ny] = normalize_coord([coord[0] + CELL_SIZE, coord[1] + CELL_SIZE]);
-    [
-        GAFVertex {
-            position: [x, y],
-            color,
-        },
-        GAFVertex {
-            position: [nx, y],
-            color,
-        },
-        GAFVertex {
-            position: [nx, ny],
-            color,
-        },
-        GAFVertex {
-            position: [x, y],
-            color,
-        },
-        GAFVertex {
-            position: [nx, ny],
-            color,
-        },
-        GAFVertex {
-            position: [x, ny],
-            color,
-        },
-    ]
-}
 
-#[derive(BufferContents, Vertex, Copy)]
+#[derive(BufferContents, Vertex, Copy, Clone)]
 #[repr(C)]
-#[derive(Clone)]
 struct GAFVertex {
     #[format(R32G32_SFLOAT)]
-    position: [f32; 2],
+    position: Coord,
 
     #[format(R32G32B32A32_SFLOAT)]
-    color: [f32; 4],
+    color: Color,
 }
 
 mod vs {
@@ -134,25 +102,79 @@ mod fs {
     }
 }
 
+
+#[derive(Clone)]
+struct FrameResources {
+    images: Vec<Arc<Image>>,
+    image_views: Vec<Arc<ImageView>>,
+    framebuffer: Vec<Arc<Framebuffer>>,
+}
+
+impl FrameResources {
+    fn create(images: Vec<Arc<Image>>, render_pass: Arc<RenderPass>) -> Self {
+        let image_views = images
+            .iter()
+            .map(|image| {
+                ImageView::new_default(
+                    image.clone(),
+                )
+                    .expect("Failed to create image view")
+            })
+            .collect::<Vec<_>>();
+
+        let framebuffer = image_views
+            .iter()
+            .map(|image| {
+                Framebuffer::new(
+                    render_pass.clone(),
+                    FramebufferCreateInfo {
+                        attachments: vec![image.clone()],
+                        layers: 1,
+                        ..Default::default()
+                    },
+                )
+                    .expect("Failed to create framebuffer")
+            })
+            .collect::<Vec<_>>();
+
+
+        Self {
+            framebuffer,
+            images,
+            image_views,
+        }
+    }
+    
+}
+
 struct RenderCtx {
     ctx: VkContext,
     swapchain: Arc<Swapchain>,
-    images: Vec<Arc<Image>>,
-    image_views: Vec<Arc<ImageView>>,
+    frame_resources: FrameResources,
     std_memory_allocator: Arc<StandardMemoryAllocator>,
-    squares: Vec<Rect>,
+    grid: Grid,
     pipeline: Arc<GraphicsPipeline>,
     render_pass: Arc<RenderPass>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-    framebuffer: Vec<Arc<Framebuffer>>,
     vertex_buffers: Vec<Subbuffer<[GAFVertex]>>,
     frame_index: usize,
     viewport: Viewport,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
+    window_width: u32,
+    window_height: u32,
 }
 
 impl RenderCtx {
-    fn new(context: VkContext) -> Self {
+
+    fn new(context: VkContext, grid: Grid) -> Self {
+        let image_format = context
+            .physical_device
+            .surface_formats(&*context.surface, Default::default())
+            .expect("Failed to get surface formats")
+            .get(0)
+            .expect("No surface formats available")
+            .0;
+
         let surface_capabilities = context
             .physical_device
             .surface_capabilities(&*context.surface, Default::default())
@@ -162,13 +184,6 @@ impl RenderCtx {
             .max_image_count
             .unwrap_or(extra_image_count)
             .min(extra_image_count);
-        let image_format = context
-            .physical_device
-            .surface_formats(&*context.surface, Default::default())
-            .expect("Failed to get surface formats")
-            .get(0)
-            .expect("No surface formats available")
-            .0;
 
         let (swapchain, images) = {
             Swapchain::new(
@@ -187,24 +202,8 @@ impl RenderCtx {
                     ..Default::default()
                 },
             )
-            .expect("Failed to create swapchain")
+                .expect("Failed to create swapchain")
         };
-
-        let image_views = images
-            .iter()
-            .map(|image| {
-                ImageView::new(
-                    image.clone(),
-                    ImageViewCreateInfo {
-                        view_type: ImageViewType::Dim2d,
-                        format: image.format(),
-                        subresource_range: image.subresource_range(),
-                        ..Default::default()
-                    },
-                )
-                .expect("Failed to create image view")
-            })
-            .collect::<Vec<_>>();
 
         let standard_memory_allocator =
             Arc::new(StandardMemoryAllocator::new_default(context.device.clone()));
@@ -213,7 +212,7 @@ impl RenderCtx {
             context.device.clone(),
             attachments: {
                  color: {
-                    format: swapchain.image_format(),
+                    format: image_format,
                     samples: 1,
                     load_op: Clear,
                     store_op: Store,
@@ -274,20 +273,10 @@ impl RenderCtx {
             StandardCommandBufferAllocatorCreateInfo::default(),
         ));
 
-        let framebuffer = image_views
-            .iter()
-            .map(|image| {
-                Framebuffer::new(
-                    render_pass.clone(),
-                    FramebufferCreateInfo {
-                        attachments: vec![image.clone()],
-                        layers: 1,
-                        ..Default::default()
-                    },
-                )
-                .expect("Failed to create framebuffer")
-            })
-            .collect::<Vec<_>>();
+        let frame_resources = FrameResources::create(
+            images,
+            render_pass.clone(),
+        );
 
         let viewport = Viewport {
             offset: [0.0; 2],
@@ -317,79 +306,138 @@ impl RenderCtx {
         let previous_frame_end = Some(sync::now(context.device.clone()).boxed());
 
         RenderCtx {
+            frame_resources,
             swapchain,
-            images,
             std_memory_allocator: standard_memory_allocator,
             pipeline,
             render_pass,
             ctx: context,
             command_buffer_allocator,
-            image_views,
-            framebuffer,
             viewport,
             vertex_buffers,
             frame_index: 0,
             previous_frame_end,
-            squares: Vec::new(),
+            grid,
+            window_width: WINDOW_WIDTH,
+            window_height: WINDOW_HEIGHT,
         }
-    }
-
-    fn add_grid(&mut self, grid: Grid) {
-        for i in 0..grid.height() {
-            for j in 0..grid.width() {
-                if grid.grid[i][j] {
-                    let coord = [j as f32 * CELL_SIZE, i as f32 * CELL_SIZE];
-                    self.add_square(coord, GRID_LIVE_COLOR);
-                } else {
-                    let coord = [j as f32 * CELL_SIZE, i as f32 * CELL_SIZE];
-                    self.add_square(coord, GRID_DEAD_COLOR);
-                }
-            }
-        }
-    }
-
-    fn set_color_square(&mut self, coord: [f32; 2], color: [f32; 4]) {
-        let coord = normalize_coord(coord);
-        for square in &mut self.squares {
-            if square[0].position == coord {
-                square[0].color = color;
-                square[1].color = color;
-                square[2].color = color;
-                square[3].color = color;
-                square[4].color = color;
-                square[5].color = color;
-            }
-        }
-    }
-
-    fn is_square_colored(&self, coord: [f32; 2]) -> bool {
-        let coord = normalize_coord(coord);
-        for square in &self.squares {
-            if square[0].position == coord {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn add_square(&mut self, coord: [f32; 2], color: [f32; 4]) {
-        if self.is_square_colored(coord) {
-            self.set_color_square(coord, color);
-            return;
-        }
-        let square = rect(coord, color);
-        self.squares.push(square);
     }
 
     fn update_vertex(&mut self) {
         let mut vertex_buffer = self.vertex_buffers[self.frame_index]
             .write()
             .expect("Can't write to vertex buffer");
-        for (rect_index, square) in self.squares.iter().enumerate() {
-            for vertex_index in 0..6 {
-                vertex_buffer[rect_index * 6 + vertex_index] = square[vertex_index];
+
+        for (col, grid_row) in self.grid.grid.iter().enumerate() {
+            for (row, cell) in grid_row.iter().enumerate() {
+                let color = if *cell {
+                    GRID_LIVE_COLOR
+                } else {
+                    GRID_DEAD_COLOR
+                };
+
+
+                let coord = [row as f32 * CELL_SIZE, col as f32 * CELL_SIZE];
+                let rect = self.rect(
+                    coord,
+                    color
+                );
+
+                let rect_index = col * self.grid.width() + row;
+
+                for vertex_index in 0..6 {
+                    vertex_buffer[rect_index * 6 + vertex_index] = rect[vertex_index]
+                }
             }
         }
+
+    }
+
+    fn grid_update(&mut self) {
+        self.grid.update();
+    }
+
+    fn normalize_coord(&self, coord: Coord) -> Coord {
+        let x = (coord[0] / self.window_width as f32) * 2.0 - 1.0;
+        let y = (coord[1] / self.window_height as f32) * 2.0 - 1.0;
+        [x, y]
+    }
+
+    fn rect(&self, coord: Coord, color: Color) -> Rect {
+        let [x, y] = self.normalize_coord(coord);
+        let [nx, ny] = self.normalize_coord([coord[0] + CELL_SIZE, coord[1] + CELL_SIZE]);
+        [
+            GAFVertex {
+                position: [x, y],
+                color,
+            },
+            GAFVertex {
+                position: [nx, y],
+                color,
+            },
+            GAFVertex {
+                position: [nx, ny],
+                color,
+            },
+            GAFVertex {
+                position: [x, y],
+                color,
+            },
+            GAFVertex {
+                position: [nx, ny],
+                color,
+            },
+            GAFVertex {
+                position: [x, ny],
+                color,
+            },
+        ]
+    }
+
+
+
+    fn resize(&mut self, physical_size: PhysicalSize<u32>) {
+        self.window_width = physical_size.width;
+        self.window_height = physical_size.height;
+        self.viewport.extent = [self.window_width as f32, self.window_height as f32];
+
+        self.grid.resize(physical_size);
+        
+        let (new_swapchain, new_images) = self.swapchain.recreate(
+            SwapchainCreateInfo {
+                image_extent: [physical_size.width, physical_size.height],
+                ..self.swapchain.create_info()
+            }
+        ).expect("Failed to recreate swapchain");
+        self.swapchain = new_swapchain;
+        self.frame_resources = FrameResources::create(
+            new_images,
+            self.render_pass.clone(),
+        );
+
+        let grid_count = 
+            (physical_size.width as f32 / CELL_SIZE) * (physical_size.height as f32 / CELL_SIZE);
+        for i in 0..2 {
+            self.vertex_buffers[i] = Buffer::new_slice(
+                self.std_memory_allocator.clone(),
+                BufferCreateInfo {
+                    usage: BufferUsage::VERTEX_BUFFER,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                        | MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+                (grid_count * 6.0) as DeviceSize,
+            )
+            .expect("Failed to create vertex buffer");
+        }
+
+    }
+
+    fn grid_len(&self) -> usize {
+        self.grid.width() * self.grid.height()
     }
 
     fn draw(&mut self) {
@@ -399,6 +447,7 @@ impl RenderCtx {
             CommandBufferUsage::OneTimeSubmit,
         )
         .expect("Failed to create command buffer builder");
+        
 
         let (image_index, suboptimal, aquirefutur) =
             acquire_next_image(self.swapchain.clone(), Some(Duration::from_secs(1)))
@@ -408,7 +457,7 @@ impl RenderCtx {
             panic!("Suboptimal");
         }
 
-        let current_framebuffer = self.framebuffer[image_index as usize].clone();
+        let current_framebuffer = self.frame_resources.framebuffer[image_index as usize].clone();
 
         command_buffer
             .begin_render_pass(
@@ -431,7 +480,7 @@ impl RenderCtx {
 
         unsafe {
             command_buffer
-                .draw((self.squares.len() * 6) as u32, 1, 0, 0)
+                .draw((self.grid_len() * 6) as u32, 1, 0, 0)
                 .expect("Failed to draw");
         }
 
@@ -455,6 +504,12 @@ impl RenderCtx {
 
         self.previous_frame_end = Some(Box::new(future));
         self.frame_index = (self.frame_index + 1) % self.vertex_buffers.len();
+
+        self
+            .previous_frame_end
+            .as_mut()
+            .unwrap()
+            .cleanup_finished();
     }
 }
 
@@ -520,7 +575,7 @@ impl VkContext {
                         .with_title("Game of Life")
                         .with_inner_size(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
                         .with_visible(true)
-                        .with_resizable(false),
+                        .with_resizable(true),
                 )
                 .expect("Failed to create window"),
         );
@@ -568,8 +623,10 @@ struct Grid {
 }
 
 impl Grid {
-    fn new() -> Self {
-        let grid = vec![vec![false; GRID_WIDTH as usize]; GRID_HEIGHT as usize];
+    fn new(width: usize, height: usize) -> Self {
+        let grid_width = width as f32 / CELL_SIZE;
+        let grid_height = height as f32 / CELL_SIZE;
+        let grid = vec![vec![false; grid_width as usize]; grid_height as usize];
         Grid { grid }
     }
 
@@ -627,39 +684,43 @@ impl Grid {
 
         self.grid = new_grid;
     }
+    
+    fn resize(&mut self, new_size: PhysicalSize<u32>) {
+        let new_width = (new_size.width as f32 / CELL_SIZE) as usize;
+        let new_height = (new_size.height as f32 / CELL_SIZE) as usize;
+
+        if new_width != self.width() || new_height != self.height() {
+            self.grid.resize(new_height, vec![false; new_width]);
+            for row in self.grid.iter_mut() {
+                row.resize(new_width, false);
+            }
+        }
+    }
 }
 
 struct GameOfLife {
     context: Option<VkContext>,
     render_ctx: Option<RenderCtx>,
-    grid: Grid,
 }
 
 impl GameOfLife {
     fn new() -> Self {
-        let mut grid = Grid::new();
-
-        grid.randomize();
-
         GameOfLife {
             context: None,
             render_ctx: None,
-            grid,
         }
     }
 }
 
 impl ApplicationHandler for GameOfLife {
+    
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let mut grid = Grid::new(WINDOW_WIDTH as usize, WINDOW_HEIGHT as usize);
+        grid.randomize();
         let vk_context = VkContext::new(event_loop);
-        let render_ctx = RenderCtx::new(vk_context.clone());
+        let render_ctx = RenderCtx::new(vk_context.clone(), grid);
         self.context = Some(vk_context);
         self.render_ctx = Some(render_ctx);
-
-        self.render_ctx
-            .as_mut()
-            .unwrap()
-            .add_grid(self.grid.clone());
     }
 
     fn window_event(
@@ -675,31 +736,27 @@ impl ApplicationHandler for GameOfLife {
             WindowEvent::RedrawRequested => {
                 self.render_ctx.as_mut().unwrap().update_vertex();
                 self.render_ctx.as_mut().unwrap().draw();
-                self.render_ctx
-                    .as_mut()
-                    .unwrap()
-                    .previous_frame_end
-                    .as_mut()
-                    .unwrap()
-                    .cleanup_finished();
-
                 self.context.as_ref().unwrap().window.request_redraw();
             }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
                         state: ElementState::Pressed,
+                        physical_key,
                         ..
                     },
                 ..
             } => {
-                self.grid.update();
-                self.render_ctx.as_mut().unwrap().squares.clear();
-                self.render_ctx
-                    .as_mut()
-                    .unwrap()
-                    .add_grid(self.grid.clone());
-            }
+                if physical_key == PhysicalKey::Code(KeyCode::KeyU) {
+                    self.render_ctx.as_mut().unwrap().grid_update();
+                } else if physical_key == PhysicalKey::Code(KeyCode::KeyN) {
+                    self.render_ctx.as_mut().unwrap().grid.randomize();
+                }
+
+            },
+            WindowEvent::Resized(physical_size) => {
+                self.render_ctx.as_mut().unwrap().resize(physical_size)
+            },
             _ => (),
         }
     }
